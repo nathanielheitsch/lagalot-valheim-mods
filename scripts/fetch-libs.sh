@@ -8,7 +8,7 @@ cd "$REPO_ROOT"
 
 LIBS="$REPO_ROOT/libs"
 BEPINEX_VER="5.4.2350"
-BEPINEX_URL="https://gcdn.thunderstore.io/live/repository/packages/denikson-BepInExPack_Valheim-${BEPINEX_VER}.zip"
+BEPINEX_URL="https://thunderstore.io/package/download/denikson/BepInExPack_Valheim/${BEPINEX_VER}/"
 
 # --- locate Valheim install ---
 VALHEIM=""
@@ -36,6 +36,7 @@ echo "Valheim install: $VALHEIM"
 MANAGED=""
 for m in \
   "$VALHEIM/valheim_Data/Managed" \
+  "$VALHEIM/valheim.app/Contents/Resources/Data/Managed" \
   "$VALHEIM/valheim.app/Contents/Resources/valheim_Data/Managed" \
   "$VALHEIM/valheim.app/Contents/Data/Managed"; do
   [[ -d "$m" ]] && MANAGED="$m" && break
@@ -55,8 +56,8 @@ if [[ ! -f "$LIBS/bepinex/BepInEx.dll" ]]; then
   TMP="$(mktemp -d)"
   curl -fL -o "$TMP/bep.zip" "$BEPINEX_URL"
   unzip -q "$TMP/bep.zip" -d "$TMP/out"
-  # The pack ships BepInEx/core/*.dll at the archive root.
-  cp "$TMP/out/BepInEx/core/"*.dll "$LIBS/bepinex/"
+  # The pack extracts to BepInExPack_Valheim/BepInEx/core/*.dll.
+  cp "$TMP/out"/BepInExPack_Valheim/BepInEx/core/*.dll "$LIBS/bepinex/"
   rm -rf "$TMP"
   echo "BepInEx core -> $LIBS/bepinex ($(ls "$LIBS/bepinex" | wc -l | tr -d ' ') dlls)"
 else

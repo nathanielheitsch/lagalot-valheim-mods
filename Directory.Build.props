@@ -29,6 +29,12 @@
     <LibsDir>$(RepoRoot)libs</LibsDir>
   </PropertyGroup>
 
+  <!-- Shared package versions; mods just add PackageReference without Version. -->
+  <ItemGroup>
+    <PackageReference Include="JotunnLib" Version="2.30.1" />
+  </ItemGroup>
+  
+
   <ItemGroup>
     <!-- Lets `dotnet build` find net48 reference assemblies on macOS/Linux. -->
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />

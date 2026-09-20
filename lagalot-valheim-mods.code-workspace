@@ -1,0 +1,14 @@
+{
+  // VS Code workspace for the mod monorepo.
+  "folders": [{ "path": "." }],
+  "settings": {
+    "dotnet.defaultSolution": "lagalot-valheim-mods.sln",
+    "csharp.suppressDotnetInstallWarning": true,
+    "csharp.suppressDotnetRestoreNotification": true,
+    "files.exclude": {
+      "**/bin": true,
+      "**/obj": true
+    }
+  },
+  "extensions": ["ms-dotnettools.csdevkit"]
+}
