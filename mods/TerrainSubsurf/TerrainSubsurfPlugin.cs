@@ -56,6 +56,33 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         harmony.PatchAll(typeof(Patches));
         Logger.LogInfo("Harmony patched Heightmap.RebuildRenderMesh");
     }
+
+    // ponytail: throttle to ~0.5s — the proximity scan is O(loaded patches) with a
+    // 2-float distance check each, so per-frame would be fine, but there's no reason
+    // to pay it 60x/sec. New patches smooth within half a second of walking near.
+    private const float ProximityInterval = 0.5f;
+    private float _nextProximityCheck;
+
+    /// <summary>
+    /// Proximity smoothing: patches culled by CullDistance at load never see another
+    /// vanilla RebuildRenderMesh when you just walk near them (vanilla only rebuilds
+    /// on terrain change / zone load), so they'd stay sharp forever without a dig.
+    /// This tick subdivides any near, not-yet-subdivided patch — sharp terrain that
+    /// generated far away smooths as you approach it.
+    /// </summary>
+    private void Update()
+    {
+        if (Time.time < _nextProximityCheck) return;
+        _nextProximityCheck = Time.time + ProximityInterval;
+        try
+        {
+            Patches.SmoothNearbyPatches();
+        }
+        catch (Exception e)
+        {
+            Logger?.LogWarning($"TerrainSubsurf proximity pass failed: {e}");
+        }
+    }
 }
 
 internal static class Patches
@@ -110,6 +137,50 @@ internal static class Patches
         float dx = p.x - c.x, dz = p.z - c.z;
         return dx * dx + dz * dz > cull * cull;
     }
+
+    /// <summary>True if we have already subdivided this patch (mesh + cache set).</summary>
+    internal static bool HasBeenSubdivided(Heightmap hm) => _cache.TryGetValue(hm, out _);
+
+    /// <summary>
+    /// Throttled proximity pass (called from the plugin's Update). Subdivides loaded
+    /// near patches we haven't done yet — the ones that were culled by distance at
+    /// load time and never got a vanilla rebuild when the player walked near.
+    /// </summary>
+    internal static void SmoothNearbyPatches()
+    {
+        if (!TerrainSubsurfPlugin._enabled.Value || _factorVal() <= 1) return;
+        if (TerrainSubsurfPlugin._cullDistance.Value <= 0f) return; // culling off: postfix already does everything at load
+        if (Player.m_localPlayer == null) return;
+
+        // Snapshot s_heightmaps: vanilla Add/Removes it from Awake/OnDestroy/LOD swaps
+        // (all main thread, but can happen mid-pass via zone load in the same frame).
+        // Reused list — grows once to the max patch count, no per-tick allocation.
+        _snapshot.Clear();
+        _snapshot.AddRange(Heightmap.GetAllHeightmaps());
+
+        for (int i = 0; i < _snapshot.Count; i++)
+        {
+            Heightmap hm = _snapshot[i];
+            if (hm == null || hm.IsDistantLod) continue; // defensive: list should already exclude LOD
+            if (IsCulledByDistance(hm)) continue;        // still far — leave it vanilla for now
+            if (HasBeenSubdivided(hm)) continue;         // already smoothed; skip even the hash pass
+            try
+            {
+                // Not in cache -> this patch was culled at load (or newly loaded within
+                // range). Subdivide directly; no vanilla rebuild needed.
+                Subdivide(hm, _factorVal(), _modeVal() == "CatmullRom");
+            }
+            catch (Exception e)
+            {
+                // One bad patch must not stop the rest of the pass.
+                TerrainSubsurfPlugin.Logger?.LogWarning($"TerrainSubsurf proximity subdivide failed (patch skipped): {e}");
+            }
+        }
+    }
+
+    // Reused snapshot buffer for SmoothNearbyPatches (no per-tick allocation beyond
+    // occasional growth of the internal array).
+    private static readonly List<Heightmap> _snapshot = new List<Heightmap>(64);
 
     /// <summary>Cheap rolling hash of the height grid (every 4th sample).</summary>
     private static int HashHeights(List<float> h)
