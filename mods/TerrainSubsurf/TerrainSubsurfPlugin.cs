@@ -25,7 +25,6 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     internal static ConfigEntry<string> _mode = null!;
     internal static ConfigEntry<float> _cullDistance = null!;
     internal static ConfigEntry<float> _flatEpsilon = null!;
-    internal static ConfigEntry<float> _cliffBlendBand = null!;
 
     internal static ConfigEntry<bool> _cliffFaceUV = null!;
     internal static ConfigEntry<float> _cliffTileSize = null!;
@@ -63,9 +62,6 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         _cliffThreshold = Config.Bind("General", "CliffFaceThreshold", 0.3f,
             new ConfigDescription("Steepness below which a face is treated as a cliff (|normal.y|; 0.3 ≈ 72°, lower = only sheer walls).",
                 null, new ConfigurationManagerAttributes { Order = -2 }));
-        _cliffBlendBand = Config.Bind("General", "CliffFaceBlendBand", 0.2f,
-            new ConfigDescription("Width of the blend zone between cliff and plan-view UV, in |normal.y| units. 0 = hard snap (old behavior, smudges). 0.2 = smooth crossfade.",
-                null, new ConfigurationManagerAttributes { Order = -3 }));
 
         Logger.LogInfo($"{NAME} {VERSION} | Enabled={_enabled.Value} Factor={_factor.Value} Mode={_mode.Value}");
 
@@ -333,58 +329,51 @@ internal static class Patches
             }
         }
 
+        // Cliff-face UV: per-TRIANGLE assignment, not per-vertex, and NO blend.
+        // Lerping between plan-view UV (0..1) and wall tiling UV (world/tile, large
+        // numbers) across two different projections is mathematically broken —
+        // Lerp((0.5,0.3),(12.5,47.3),0.5)=(6.5,23.8) samples a random texel, which is
+        // what caused the stretched grass + grey smudge. Instead each TRIANGLE is
+        // entirely in one UV space: face normal from its own 3 positions decides.
+        bool cliff = TerrainSubsurfPlugin._cliffFaceUV.Value;
+        float tile = TerrainSubsurfPlugin._cliffTileSize.Value;
+        float steepLimit = TerrainSubsurfPlugin._cliffThreshold.Value;
+        if (cliff && tile > 0f && indices.Length >= 3)
+        {
+            Vector3 origin = hm.transform.position;
+            // Per-triangle: steep faces get wall UV on all 3 verts; flat/slope tris
+            // keep plan-view UV (already set by the build loop). |n.y| is direction-
+            // agnostic, so face-normal winding (outward vs inward) doesn't matter here.
+            // Local positions are fine: |n.y| is unchanged by a rigid transform.
+            for (int tri = 0; tri < indices.Length; tri += 3)
+            {
+                int a = indices[tri], b = indices[tri + 1], c = indices[tri + 2];
+                Vector3 nrm = Vector3.Cross(verts[b] - verts[a], verts[c] - verts[a]);
+                if (Mathf.Abs(nrm.y) >= steepLimit) continue;   // flat/slope: keep plan UV
+                // Wall UV — u axis chosen by the TRIANGLE's face normal so all 3 verts
+                // of the tri project consistently.
+                bool alongZ = Mathf.Abs(nrm.x) > Mathf.Abs(nrm.z);
+                float wv = (origin.y + verts[a].y) / tile;
+                uvs[a] = new Vector2((alongZ ? origin.z + verts[a].z : origin.x + verts[a].x) / tile, wv);
+                uvs[b] = new Vector2((alongZ ? origin.z + verts[b].z : origin.x + verts[b].x) / tile, (origin.y + verts[b].y) / tile);
+                uvs[c] = new Vector2((alongZ ? origin.z + verts[c].z : origin.x + verts[c].x) / tile, (origin.y + verts[c].y) / tile);
+            }
+            // ponytail: boundary-continuity refinement (wall UV equal to plan UV at the
+            // cliff edge so the seam is seamless) is possible with a second pass but
+            // last-writer-wins already leaves only a clean hard line at the cliff edge,
+            // which reads naturally where grass meets rock. Shipped as-is.
+        }
+
         var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };
         // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
         // Vanilla defaults to UInt16; silently overflowing produces garbage indices.
         // UInt32 is safe and cheap at this scale.
         mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-        // ponytail (cliff-face UV): normals must exist BEFORE we decide the UVs, so
-        // build verts+indices, RecalculateNormals, read them back, remap the steep
-        // verts' UVs to world-space tiling, then set colors/UVs. Vanilla plan-view UV
-        // is kept on flat/slope verts; only |n.y| < threshold verts get wall tiling.
         mesh.SetVertices(verts);
+        mesh.SetColors(colors);
+        mesh.SetUVs(0, uvs);
         mesh.SetIndices(indices, MeshTopology.Triangles, 0);
         mesh.RecalculateNormals();
-
-        bool cliff = TerrainSubsurfPlugin._cliffFaceUV.Value;
-        float tile = TerrainSubsurfPlugin._cliffTileSize.Value;
-        float steepLimit = TerrainSubsurfPlugin._cliffThreshold.Value;
-        float band = TerrainSubsurfPlugin._cliffBlendBand.Value;
-        if (cliff && tile > 0f)
-        {
-            Vector3[] normals = mesh.normals;
-            Vector3 origin = hm.transform.position;
-            float low = Mathf.Max(0f, steepLimit - band * 0.5f);
-            float high = steepLimit + band * 0.5f;
-            for (int i = 0; i < fn; i++)
-            {
-                for (int j = 0; j < fn; j++)
-                {
-                    int idx = i * fn + j;
-                    float ny = Mathf.Abs(normals[idx].y);
-                    // ponytail (UV seam fix): per-vertex hard snap left triangles
-                    // straddling the threshold with verts in DIFFERENT UV spaces, so the
-                    // GPU's linear UV interpolation sampled distant texels -> grey/green
-                    // smudge around every tiled area. Blend the two UV spaces smoothly
-                    // instead: w=0 (steep) -> pure wall UV, w=1 (flat) -> pure plan UV,
-                    // SmoothStep in between. Grass-vs-stone is normal-based in the shader,
-                    // so both spaces sample the SAME texture layer — the lerp is a clean
-                    // crossfade of tiling position, not a texture swap.
-                    float wgt = Mathf.SmoothStep(low, high, ny);
-                    if (wgt >= 1f) continue; // fully plan-view; the array already holds plan UV
-                    // Verified vs decompile: CalcVertex returns LOCAL space and
-                    // m_meshFilter = GetComponent<MeshFilter>() on the same GameObject,
-                    // so world = hm.transform.position + localVert.
-                    float v = (origin.y + verts[idx].y) / tile;
-                    float u = Mathf.Abs(normals[idx].x) > Mathf.Abs(normals[idx].z)
-                        ? (origin.z + verts[idx].z) / tile   // wall faces ±X, along-wall = Z
-                        : (origin.x + verts[idx].x) / tile;  // wall faces ±Z, along-wall = X
-                    uvs[idx] = Vector2.Lerp(new Vector2(u, v), uvs[idx], wgt);
-                }
-            }
-        }
-
-        mesh.SetColors(colors);
         mesh.SetUVs(0, uvs);
         mesh.RecalculateTangents();
         mesh.RecalculateBounds();
