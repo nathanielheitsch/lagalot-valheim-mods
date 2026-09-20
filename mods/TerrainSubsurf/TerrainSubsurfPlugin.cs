@@ -55,6 +55,18 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         var harmony = new Harmony(GUID);
         harmony.PatchAll(typeof(Patches));
         Logger.LogInfo("Harmony patched Heightmap.RebuildRenderMesh");
+
+        // Live config: invalidate the cache on ANY setting change so already-smoothed
+        // patches re-subdivide with the new factor/mode/cull distance. Clearing the cache
+        // alone suffices — the proximity tick (0.5s) re-smooths near patches, and vanilla
+        // rebuilds handle any terrain touched later. For an instant visible update we
+        // also poke all near heightmaps to rebuild.
+        Config.SettingChanged += (_, _) =>
+        {
+            Patches.InvalidateCache();
+            Patches.RebuildAllNearHeightmaps();
+            Logger.LogInfo($"Config changed → cache cleared, factor={_factor.Value} mode={_mode.Value} cull={_cullDistance.Value} flat={_flatEpsilon.Value}");
+        };
     }
 
     // ponytail: throttle to ~0.5s — the proximity scan is O(loaded patches) with a
@@ -102,7 +114,23 @@ internal static class Patches
         public float Scale;
     }
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Heightmap, CacheEntry> _cache = new();
+    private static System.Runtime.CompilerServices.ConditionalWeakTable<Heightmap, CacheEntry> _cache = new();
+
+    internal static void InvalidateCache() => _cache = new();  // ponytail: CWT has no Clear on net48; swap the whole table
+
+    /// <summary>Trigger a vanilla rebuild on every near (non-LOD) heightmap so the
+    /// postfix re-subdivides them with the current config. Snapshot to avoid mid-pass
+    /// mutation of s_heightmaps.</summary>
+    internal static void RebuildAllNearHeightmaps()
+    {
+        var snap = new List<Heightmap>(Heightmap.GetAllHeightmaps());
+        foreach (var hm in snap)
+        {
+            if (hm == null || hm.IsDistantLod) continue;
+            try { hm.Poke(); }
+            catch { /* ignore — a destroyed patch during a settings flip is fine */ }
+        }
+    }
 
     [HarmonyPatch(typeof(Heightmap), "RebuildRenderMesh")]
     [HarmonyPostfix]
