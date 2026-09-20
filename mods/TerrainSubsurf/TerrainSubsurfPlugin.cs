@@ -25,6 +25,9 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     internal static ConfigEntry<string> _mode = null!;
     internal static ConfigEntry<float> _cullDistance = null!;
     internal static ConfigEntry<float> _flatEpsilon = null!;
+    internal static ConfigEntry<bool> _cliffFaceUV = null!;
+    internal static ConfigEntry<float> _cliffTileSize = null!;
+    internal static ConfigEntry<float> _cliffThreshold = null!;
 
     private void Awake()
     {
@@ -49,6 +52,15 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         _flatEpsilon = Config.Bind("General", "FlatEpsilon", 0.05f,
             new ConfigDescription("Skip smoothing patches whose height range (max-min) is below this — flat terrain stays at vanilla cost.",
                 null, new ConfigurationManagerAttributes { Order = 1 }));
+        _cliffFaceUV = Config.Bind("General", "CliffFaceUV", true,
+            new ConfigDescription("Remap UVs on steep terrain so textures tile down cliff faces instead of stretching.",
+                null, new ConfigurationManagerAttributes { Order = 0 }));
+        _cliffTileSize = Config.Bind("General", "CliffFaceTileSize", 2f,
+            new ConfigDescription("World units per texture tile on cliff faces (smaller = more repeats).",
+                null, new ConfigurationManagerAttributes { Order = -1 }));
+        _cliffThreshold = Config.Bind("General", "CliffFaceThreshold", 0.3f,
+            new ConfigDescription("Steepness below which a face is treated as a cliff (|normal.y|; 0.3 ≈ 72°, lower = only sheer walls).",
+                null, new ConfigurationManagerAttributes { Order = -2 }));
 
         Logger.LogInfo($"{NAME} {VERSION} | Enabled={_enabled.Value} Factor={_factor.Value} Mode={_mode.Value}");
 
@@ -316,15 +328,47 @@ internal static class Patches
             }
         }
 
-        var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };        // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
+        var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };
+        // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
         // Vanilla defaults to UInt16; silently overflowing produces garbage indices.
         // UInt32 is safe and cheap at this scale.
         mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        // ponytail (cliff-face UV): normals must exist BEFORE we decide the UVs, so
+        // build verts+indices, RecalculateNormals, read them back, remap the steep
+        // verts' UVs to world-space tiling, then set colors/UVs. Vanilla plan-view UV
+        // is kept on flat/slope verts; only |n.y| < threshold verts get wall tiling.
         mesh.SetVertices(verts);
-        mesh.SetColors(colors);
-        mesh.SetUVs(0, uvs);
         mesh.SetIndices(indices, MeshTopology.Triangles, 0);
         mesh.RecalculateNormals();
+
+        bool cliff = TerrainSubsurfPlugin._cliffFaceUV.Value;
+        float tile = TerrainSubsurfPlugin._cliffTileSize.Value;
+        float steepLimit = TerrainSubsurfPlugin._cliffThreshold.Value;
+        if (cliff && tile > 0f)
+        {
+            Vector3[] normals = mesh.normals;
+            Vector3 origin = hm.transform.position;
+            for (int i = 0; i < fn; i++)
+            {
+                for (int j = 0; j < fn; j++)
+                {
+                    int idx = i * fn + j;
+                    Vector3 normal = normals[idx];
+                    if (Mathf.Abs(normal.y) >= steepLimit) continue; // flat/slope: keep plan-view UV
+                    // Verified vs decompile: CalcVertex returns LOCAL space and
+                    // m_meshFilter = GetComponent<MeshFilter>() on the same GameObject,
+                    // so world = hm.transform.position + localVert.
+                    float v = (origin.y + verts[idx].y) / tile;
+                    float u = Mathf.Abs(normal.x) > Mathf.Abs(normal.z)
+                        ? (origin.z + verts[idx].z) / tile   // wall faces ±X, along-wall = Z
+                        : (origin.x + verts[idx].x) / tile;  // wall faces ±Z, along-wall = X
+                    uvs[idx] = new Vector2(u, v);
+                }
+            }
+        }
+
+        mesh.SetColors(colors);
+        mesh.SetUVs(0, uvs);
         mesh.RecalculateTangents();
         mesh.RecalculateBounds();
 
