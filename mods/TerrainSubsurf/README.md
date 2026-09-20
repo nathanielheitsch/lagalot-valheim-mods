@@ -13,8 +13,11 @@ Valheim's terrain is a custom `Heightmap` MonoBehaviour with two separate meshes
 | Key | Default | Values | Meaning |
 | --- | --- | --- | --- |
 | `Enabled` | `true` | bool | Master toggle. |
-| `SubdivisionFactor` | `4` | 1 / 2 / 4 / 8 | Render-mesh resolution multiplier. 1 = off (vanilla). 8 is a heavy GPU/memory cost; 4 is the sane default. |
-| `SmoothingMode` | `CatmullRom` | Linear / CatmullRom | Height interpolation for new vertices. Catmull-Rom curves the surface; Linear just makes smaller flat facets. |
+| `SubdivisionFactor` | `2` | 1 / 2 / 4 / 8 | Render-mesh resolution multiplier. 1 = off (vanilla). 4/8 are heavy GPU/memory; 2 is the default sweet spot. |
+| `SmoothingMode` | `CatmullRom` | Linear / CatmullRom | Height interpolation for new vertices. Catmull-Rom curves the surface; Linear makes smaller flat facets. |
+| `CullDistance` | `0` | float (world units) | Only smooth patches within this distance of the player. 0 = smooth ALL loaded patches (recommended — the whole world renders better). Set >0 for a perf trade-off (far patches stay vanilla; a proximity tick re-smooths them as you approach). |
+| `FlatEpsilon` | `0.05` | float (world units) | Skip smoothing patches whose height range (max-min) is below this — flat terrain stays at vanilla cost. |
+| `RebuildAllTerrain` | `F6` | keybind | Press in-game to clear the cache and rebuild all near terrain immediately (debug). |
 
 ## Build
 

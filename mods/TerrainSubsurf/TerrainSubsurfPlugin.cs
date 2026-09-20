@@ -26,9 +26,6 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     internal static ConfigEntry<float> _cullDistance = null!;
     internal static ConfigEntry<float> _flatEpsilon = null!;
 
-    internal static ConfigEntry<bool> _cliffFaceUV = null!;
-    internal static ConfigEntry<float> _cliffTileSize = null!;
-    internal static ConfigEntry<float> _cliffThreshold = null!;
     internal static ConfigEntry<BepInEx.Configuration.KeyboardShortcut> _rebuildKey = null!;
 
     private void Awake()
@@ -54,15 +51,6 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         _flatEpsilon = Config.Bind("General", "FlatEpsilon", 0.05f,
             new ConfigDescription("Skip smoothing patches whose height range (max-min) is below this — flat terrain stays at vanilla cost.",
                 null, new ConfigurationManagerAttributes { Order = 1 }));
-        _cliffFaceUV = Config.Bind("General", "CliffFaceUV", true,
-            new ConfigDescription("Remap UVs on steep terrain so textures tile down cliff faces instead of stretching.",
-                null, new ConfigurationManagerAttributes { Order = 0 }));
-        _cliffTileSize = Config.Bind("General", "CliffFaceTileSize", 2f,
-            new ConfigDescription("World units per texture tile on cliff faces (smaller = more repeats).",
-                null, new ConfigurationManagerAttributes { Order = -1 }));
-        _cliffThreshold = Config.Bind("General", "CliffFaceThreshold", 0.3f,
-            new ConfigDescription("Steepness below which a face is treated as a cliff (|normal.y|; 0.3 ≈ 72°, lower = only sheer walls).",
-                null, new ConfigurationManagerAttributes { Order = -2 }));
         _rebuildKey = Config.Bind("General", "RebuildAllTerrain", new BepInEx.Configuration.KeyboardShortcut(KeyCode.F6),
             new ConfigDescription("Press this key in-game to clear the cache and rebuild all near terrain immediately (debug). Default F6.",
                 null, new ConfigurationManagerAttributes { Order = -3, Description = "Press in-game to rebuild all terrain now." }));
@@ -345,41 +333,6 @@ internal static class Patches
             }
         }
 
-        // Cliff-face UV: per-TRIANGLE assignment, not per-vertex, and NO blend.
-        // Lerping between plan-view UV (0..1) and wall tiling UV (world/tile, large
-        // numbers) across two different projections is mathematically broken —
-        // Lerp((0.5,0.3),(12.5,47.3),0.5)=(6.5,23.8) samples a random texel, which is
-        // what caused the stretched grass + grey smudge. Instead each TRIANGLE is
-        // entirely in one UV space: face normal from its own 3 positions decides.
-        bool cliff = TerrainSubsurfPlugin._cliffFaceUV.Value;
-        float tile = TerrainSubsurfPlugin._cliffTileSize.Value;
-        float steepLimit = TerrainSubsurfPlugin._cliffThreshold.Value;
-        if (cliff && tile > 0f && indices.Length >= 3)
-        {
-            Vector3 origin = hm.transform.position;
-            // Per-triangle: steep faces get wall UV on all 3 verts; flat/slope tris
-            // keep plan-view UV (already set by the build loop). |n.y| is direction-
-            // agnostic, so face-normal winding (outward vs inward) doesn't matter here.
-            // Local positions are fine: |n.y| is unchanged by a rigid transform.
-            for (int tri = 0; tri < indices.Length; tri += 3)
-            {
-                int a = indices[tri], b = indices[tri + 1], c = indices[tri + 2];
-                Vector3 nrm = Vector3.Cross(verts[b] - verts[a], verts[c] - verts[a]);
-                if (Mathf.Abs(nrm.y) >= steepLimit) continue;   // flat/slope: keep plan UV
-                // Wall UV — u axis chosen by the TRIANGLE's face normal so all 3 verts
-                // of the tri project consistently.
-                bool alongZ = Mathf.Abs(nrm.x) > Mathf.Abs(nrm.z);
-                float wv = (origin.y + verts[a].y) / tile;
-                uvs[a] = new Vector2((alongZ ? origin.z + verts[a].z : origin.x + verts[a].x) / tile, wv);
-                uvs[b] = new Vector2((alongZ ? origin.z + verts[b].z : origin.x + verts[b].x) / tile, (origin.y + verts[b].y) / tile);
-                uvs[c] = new Vector2((alongZ ? origin.z + verts[c].z : origin.x + verts[c].x) / tile, (origin.y + verts[c].y) / tile);
-            }
-            // ponytail: boundary-continuity refinement (wall UV equal to plan UV at the
-            // cliff edge so the seam is seamless) is possible with a second pass but
-            // last-writer-wins already leaves only a clean hard line at the cliff edge,
-            // which reads naturally where grass meets rock. Shipped as-is.
-        }
-
         var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };
         // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
         // Vanilla defaults to UInt16; silently overflowing produces garbage indices.
@@ -390,7 +343,6 @@ internal static class Patches
         mesh.SetUVs(0, uvs);
         mesh.SetIndices(indices, MeshTopology.Triangles, 0);
         mesh.RecalculateNormals();
-        mesh.SetUVs(0, uvs);
         mesh.RecalculateTangents();
         mesh.RecalculateBounds();
 
