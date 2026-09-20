@@ -18,3 +18,4 @@ libs/
 
 # Thunderstore / BepInEx downloads cache
 .cache/
+TESTING_RHINO.md

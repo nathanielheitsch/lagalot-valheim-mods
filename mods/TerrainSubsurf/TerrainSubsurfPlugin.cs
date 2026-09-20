@@ -75,7 +75,24 @@ internal static class Patches
         MeshFilter mf = HeightmapAccess.GetMeshFilter(hm);
         if (heights == null || renderMesh == null || mf == null) return;
 
+        // Guard 1: vanilla copies render-mesh vertices from m_collisionMesh, so if
+        // the collision mesh was never built (e.g. menu heightmaps before a world
+        // loads), the vanilla render mesh is EMPTY. Vanilla renders nothing there;
+        // if we synthesize a mesh from m_heights anyway we inject geometry where
+        // vanilla had none -> garbage/degenerate mesh -> black screen. Never do that.
+        var vanillaVerts = new List<Vector3>();
+        renderMesh.GetVertices(vanillaVerts);
+        if (vanillaVerts.Count == 0) return; // nothing rendered vanilla-side; keep it that way
+
         int n = w + 1;               // vanilla grid
+        // Guard 2: heights must be a full (w+1)^2 grid, and w/scale must be sane.
+        if (w <= 0 || scale <= 0f || heights.Count < n * n) return;
+        // Guard 3: reject NaN/Inf height data (uninitialized samples would poison
+        // every interpolated vertex and the GPU silently drops the mesh).
+        bool bad = false;
+        for (int c = 0; c < heights.Count; c++) { float v = heights[c]; if (float.IsNaN(v) || float.IsInfinity(v)) { bad = true; break; } }
+        if (bad) return;
+
         int fw = w * factor;         // fine grid edge (in vanilla steps)
         int fn = fw + 1;             // fine vertex count per side
         float half = (float)w * scale * 0.5f;
@@ -128,6 +145,10 @@ internal static class Patches
         }
 
         var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };
+        // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
+        // Vanilla defaults to UInt16; silently overflowing produces garbage indices.
+        // UInt32 is safe and cheap at this scale.
+        mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
         mesh.SetVertices(verts);
         mesh.SetColors(colors);
         mesh.SetUVs(0, uvs);
