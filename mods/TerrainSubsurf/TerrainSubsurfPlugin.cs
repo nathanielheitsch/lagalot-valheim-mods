@@ -23,6 +23,8 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     internal static ConfigEntry<bool> _enabled = null!;
     internal static ConfigEntry<int> _factor = null!;
     internal static ConfigEntry<string> _mode = null!;
+    internal static ConfigEntry<float> _cullDistance = null!;
+    internal static ConfigEntry<float> _flatEpsilon = null!;
 
     private void Awake()
     {
@@ -32,15 +34,21 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         // slider/toggle change re-subdivides on the next terrain rebuild.
         _enabled = Config.Bind("General", "Enabled", true,
             new ConfigDescription("Master toggle for terrain render smoothing.",
-                null, new ConfigurationManagerAttributes { Order = 3 }));
-        _factor = Config.Bind("General", "SubdivisionFactor", 4,
-            new ConfigDescription("Render-mesh resolution multiplier. 1 = off (vanilla). 8 is a heavy GPU cost; 4 is the sane default.",
+                null, new ConfigurationManagerAttributes { Order = 5 }));
+        _factor = Config.Bind("General", "SubdivisionFactor", 2,
+            new ConfigDescription("Render-mesh resolution multiplier. 1 = off (vanilla). 4/8 are heavy; 2 is the default sweet spot.",
                 new AcceptableValueList<int>(1, 2, 4, 8),
-                new ConfigurationManagerAttributes { Order = 2 }));
+                new ConfigurationManagerAttributes { Order = 4 }));
         _mode = Config.Bind("General", "SmoothingMode", "CatmullRom",
             new ConfigDescription("Height interpolation for new vertices. CatmullRom curves the surface; Linear makes smaller flat facets.",
                 new AcceptableValueList<string>("Linear", "CatmullRom"),
-                new ConfigurationManagerAttributes { Order = 1 }));
+                new ConfigurationManagerAttributes { Order = 3 }));
+        _cullDistance = Config.Bind("General", "CullDistance", 40f,
+            new ConfigDescription("Only smooth patches within this distance of the player (world units). 0 = smooth all loaded patches.",
+                null, new ConfigurationManagerAttributes { Order = 2 }));
+        _flatEpsilon = Config.Bind("General", "FlatEpsilon", 0.05f,
+            new ConfigDescription("Skip smoothing patches whose height range (max-min) is below this — flat terrain stays at vanilla cost.",
+                null, new ConfigurationManagerAttributes { Order = 1 }));
 
         Logger.LogInfo($"{NAME} {VERSION} | Enabled={_enabled.Value} Factor={_factor.Value} Mode={_mode.Value}");
 
@@ -52,17 +60,34 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
 
 internal static class Patches
 {
+    /// <summary>Height-range threshold below which a patch is considered flat.</summary>
+    private const int kHeightSampleStride = 4;
+
+    /// <summary>
+    /// Per-Heightmap cache of the last-subdivided state. ConditionalWeakTable so the
+    /// key does not keep Heightmaps alive (they are destroyed on zone unload).
+    /// m_heights is mutated in place, so we hash CONTENTS, not reference identity.
+    /// </summary>
+    private sealed class CacheEntry
+    {
+        public int Hash;
+        public int Width;
+        public float Scale;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Heightmap, CacheEntry> _cache = new();
+
     [HarmonyPatch(typeof(Heightmap), "RebuildRenderMesh")]
     [HarmonyPostfix]
     private static void Postfix(Heightmap __instance)
     {
-        var cfg = TerrainSubsurfPlugin._enabled;
         try
         {
-            if (!cfg.Value || _factorVal() <= 1) return;
+            if (!TerrainSubsurfPlugin._enabled.Value || _factorVal() <= 1) return;
             // Skip distant-LOD heightmaps: subdividing far terrain wastes GPU and can
             // fight the LOD swap. Near terrain is where sharp edges actually read.
             if (__instance.IsDistantLod) return;
+            if (IsCulledByDistance(__instance)) return;
             Subdivide(__instance, _factorVal(), _modeVal() == "CatmullRom");
         }
         catch (Exception e)
@@ -70,6 +95,29 @@ internal static class Patches
             // Never break the vanilla render path.
             TerrainSubsurfPlugin.Logger?.LogWarning($"TerrainSubsurf postfix failed (vanilla mesh kept): {e}");
         }
+    }
+
+    /// <summary>True if the patch is farther than CullDistance from the player (xz only).</summary>
+    private static bool IsCulledByDistance(Heightmap hm)
+    {
+        float cull = TerrainSubsurfPlugin._cullDistance.Value;
+        if (cull <= 0f) return false; // 0 disables culling
+        // Player.m_localPlayer is public static (decompiled line 158). If null (menu,
+        // or no player yet), do NOT cull — safer to subdivide.
+        if (Player.m_localPlayer == null) return false;
+        Vector3 p = Player.m_localPlayer.transform.position;
+        Vector3 c = hm.transform.position;
+        float dx = p.x - c.x, dz = p.z - c.z;
+        return dx * dx + dz * dz > cull * cull;
+    }
+
+    /// <summary>Cheap rolling hash of the height grid (every 4th sample).</summary>
+    private static int HashHeights(List<float> h)
+    {
+        int hash = 17;
+        for (int i = 0; i < h.Count; i += kHeightSampleStride)
+            hash = hash * 397 ^ h[i].GetHashCode();
+        return hash;
     }
 
     private static int _factorVal() => TerrainSubsurfPlugin._factor.Value;
@@ -103,6 +151,19 @@ internal static class Patches
         for (int c = 0; c < heights.Count; c++) { float v = heights[c]; if (float.IsNaN(v) || float.IsInfinity(v)) { bad = true; break; } }
         if (bad) return;
 
+        // OPTIMIZATION 1 — skip-if-flat: one O(n) pass. Flat terrain (max-min < eps)
+        // gets no visual benefit from smoothing; leave the vanilla mesh untouched.
+        float max = float.MinValue, min = float.MaxValue;
+        for (int c = 0; c < heights.Count; c++) { float v = heights[c]; if (v > max) max = v; if (v < min) min = v; }
+        if (max - min < TerrainSubsurfPlugin._flatEpsilon.Value) return;
+
+        // OPTIMIZATION 3 — skip-if-unchanged: heights are hashed in place; if the
+        // content hash + width + scale match what we already subdivided, the mesh we
+        // set last time is still valid. Catches redundant rebuilds when a neighbouring
+        // patch is modified and this one re-renders unchanged.
+        int hash = HashHeights(heights);
+        if (_cache.TryGetValue(hm, out var prev) && prev.Hash == hash && prev.Width == w && prev.Scale == scale) return;
+
         int fw = w * factor;         // fine grid edge (in vanilla steps)
         int fn = fw + 1;             // fine vertex count per side
         float half = (float)w * scale * 0.5f;
@@ -110,10 +171,6 @@ internal static class Patches
         var verts = new Vector3[fn * fn];
         var uvs = new Vector2[fn * fn];
         var colors = new Color32[fn * fn];
-
-        // Vanilla color array from the just-built render mesh (corner-biome interpolation).
-        var vanillaColors = renderMesh.colors32;
-        var vanillaUvs = renderMesh.uv;
 
         float step = 1f / factor;    // fine step in vanilla-vertex units
 
@@ -134,8 +191,14 @@ internal static class Patches
                 // UV: same 0..1 patch mapping as vanilla (j/w, i/w) — no texture stretch.
                 uvs[idx] = new Vector2(x / w, y / w);
 
-                // Colors: bilinear interp of the vanilla color array.
-                colors[idx] = BilinearColor(vanillaColors, n, x, y, w);
+                // OPTIMIZATION 5 — colors straight from vanilla's private
+                // GetBiomeColor(ix, iy) (same SmoothStep lerp of m_cornerBiomes incl.
+                // AltBiome overrides). t = col/(w*factor) maps the fine vertex to the
+                // same 0..1 range vanilla uses; then vanilla's own smoothstep.
+                float tX = (float)j / fw, tY = (float)i / fw;
+                float ix = tX * tX * (3f - 2f * tX);
+                float iy = tY * tY * (3f - 2f * tY);
+                colors[idx] = HeightmapAccess.GetBiomeColor(hm, ix, iy);
             }
         }
 
@@ -154,8 +217,7 @@ internal static class Patches
             }
         }
 
-        var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };
-        // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
+        var mesh = new Mesh { name = "___Heightmap m_renderMesh (subsurf)" };        // Guard 4: factor=8 gives ~66k verts, over the UInt16 index limit (65535).
         // Vanilla defaults to UInt16; silently overflowing produces garbage indices.
         // UInt32 is safe and cheap at this scale.
         mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
@@ -169,6 +231,10 @@ internal static class Patches
 
         mf.mesh = mesh;
         HeightmapAccess.SetRenderMesh(hm, mesh);
+
+        // ponytail: ConditionalWeakTable has no AddOrUpdate on net48 — remove+add.
+        _cache.Remove(hm);
+        _cache.Add(hm, new CacheEntry { Hash = hash, Width = w, Scale = scale });
     }
 
     private static float SampleLinear(List<float> h, int n, float x, float y, int w)
@@ -215,14 +281,4 @@ internal static class Patches
         };
     }
 
-    private static Color32 BilinearColor(Color32[] c, int n, float x, float y, int w)
-    {
-        if (c == null || c.Length == 0) return new Color32(0, 0, 0, 0);
-        int x0 = Mathf.FloorToInt(x), y0 = Mathf.FloorToInt(y);
-        int x1 = Mathf.Min(x0 + 1, w), y1 = Mathf.Min(y0 + 1, w);
-        float tx = x - x0, ty = y - y0;
-        var a = c[y0 * n + x0]; var b = c[y0 * n + x1];
-        var d = c[y1 * n + x0]; var e = c[y1 * n + x1];
-        return Color32.Lerp(Color32.Lerp(a, b, tx), Color32.Lerp(d, e, tx), ty);
-    }
 }

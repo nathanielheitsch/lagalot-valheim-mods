@@ -42,4 +42,21 @@ internal static class HeightmapAccess
     public static MeshFilter GetMeshFilter(Heightmap hm) => (MeshFilter)MeshFilterF.GetValue(hm)!;
     public static Mesh GetRenderMesh(Heightmap hm) => (Mesh)RenderMeshF.GetValue(hm)!;
     public static void SetRenderMesh(Heightmap hm, Mesh mesh) => RenderMeshF.SetValue(hm, mesh);
+
+    private static MethodInfo? _biomeColor;
+
+    /// <summary>
+    /// Vanilla's private instance GetBiomeColor(float ix, float iy). Encapsulates the
+    /// m_cornerBiomes lerp AND AltBiome terrain-texture overrides, so calling it keeps
+    /// our colors byte-for-byte identical to vanilla (no formula drift).
+    /// </summary>
+    public static Color32 GetBiomeColor(Heightmap hm, float ix, float iy)
+    {
+        _biomeColor ??= typeof(Heightmap).GetMethod("GetBiomeColor",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            null, new[] { typeof(float), typeof(float) }, null)
+            ?? throw new System.MissingMemberException("Heightmap.GetBiomeColor(float,float) not found");
+        object boxed = hm;
+        return (Color32)(_biomeColor.Invoke(boxed, new object[] { ix, iy }) ?? default(Color32));
+    }
 }
