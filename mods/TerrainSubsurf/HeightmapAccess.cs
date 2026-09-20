@@ -57,6 +57,10 @@ internal static class HeightmapAccess
             null, new[] { typeof(float), typeof(float) }, null)
             ?? throw new System.MissingMemberException("Heightmap.GetBiomeColor(float,float) not found");
         object boxed = hm;
-        return (Color32)(_biomeColor.Invoke(boxed, new object[] { ix, iy }) ?? default(Color32));
+        // Vanilla GetBiomeColor(float,float) returns Color (not Color32); cast to Color
+        // then convert. The early-return path converts Color32->Color implicitly,
+        // so the declared return type is Color.
+        Color c = (Color)(_biomeColor.Invoke(boxed, new object[] { ix, iy }) ?? default(Color));
+        return (Color32)c;
     }
 }
