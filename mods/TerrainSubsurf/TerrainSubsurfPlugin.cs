@@ -29,6 +29,7 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     internal static ConfigEntry<bool> _cliffFaceUV = null!;
     internal static ConfigEntry<float> _cliffTileSize = null!;
     internal static ConfigEntry<float> _cliffThreshold = null!;
+    internal static ConfigEntry<BepInEx.Configuration.KeyboardShortcut> _rebuildKey = null!;
 
     private void Awake()
     {
@@ -62,6 +63,9 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         _cliffThreshold = Config.Bind("General", "CliffFaceThreshold", 0.3f,
             new ConfigDescription("Steepness below which a face is treated as a cliff (|normal.y|; 0.3 ≈ 72°, lower = only sheer walls).",
                 null, new ConfigurationManagerAttributes { Order = -2 }));
+        _rebuildKey = Config.Bind("General", "RebuildAllTerrain", new BepInEx.Configuration.KeyboardShortcut(KeyCode.F6),
+            new ConfigDescription("Press this key in-game to clear the cache and rebuild all near terrain immediately (debug). Default F6.",
+                null, new ConfigurationManagerAttributes { Order = -3, Description = "Press in-game to rebuild all terrain now." }));
 
         Logger.LogInfo($"{NAME} {VERSION} | Enabled={_enabled.Value} Factor={_factor.Value} Mode={_mode.Value}");
 
@@ -97,6 +101,18 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     /// </summary>
     private void Update()
     {
+        // Rebuild key: check every frame (a quick tap shouldn't be missed by the 0.5s throttle).
+        try
+        {
+            if (_rebuildKey != null && Input.GetKeyDown(_rebuildKey.Value.MainKey))
+            {
+                Patches.InvalidateCache();
+                Patches.RebuildAllNearHeightmaps();
+                Logger.LogInfo("RebuildAllTerrain key pressed — cache cleared, all near terrain rebuilding.");
+            }
+        }
+        catch (Exception e) { Logger?.LogWarning($"TerrainSubsurf rebuild-key failed: {e}"); }
+
         if (Time.time < _nextProximityCheck) return;
         _nextProximityCheck = Time.time + ProximityInterval;
         try
