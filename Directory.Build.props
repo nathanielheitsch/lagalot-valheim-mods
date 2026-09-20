@@ -1,0 +1,37 @@
+<Project>
+
+  <!-- Shared MSBuild props for every mod under mods/.
+       Each mod's .csproj targets net48 and references the libs/ folder. -->
+
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+
+    <!-- Valheim runs on .NET Framework 4.8. -->
+    <TargetFramework>net48</TargetFramework>
+
+    <!-- Reference assemblies let us build net48 on macOS without the runtime. -->
+    <EnableImplicitNetFrameworkAssemblies>false</EnableImplicitNetFrameworkAssemblies>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyOriginatorKeyFile></AssemblyOriginatorKeyFile>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+
+    <!-- One DLL per mod; no app host needed. -->
+    <OutputType>Library</OutputType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <!-- Resolved per-repo so all mods share libs/. -->
+    <RepoRoot Condition=" '$(RepoRoot)' == '' ">$(MSBuildThisFileDirectory)</RepoRoot>
+    <LibsDir>$(RepoRoot)libs</LibsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets `dotnet build` find net48 reference assemblies on macOS/Linux. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+
+# Local reference libraries (game + BepInEx DLLs fetched via scripts/fetch-libs.sh)
+# Not committed: large, game-specific, redistributable on demand.
+libs/
+
+# Local game install pointer (do not commit machine-specific paths)
+.valheim-path
+
+# macOS
+.DS_Store
+
+# Thunderstore / BepInEx downloads cache
+.cache/
