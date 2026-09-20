@@ -47,6 +47,10 @@
       <HintPath>$(LibsDir)/bepinex/BepInEx.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(LibsDir)/bepinex/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- Valheim game assemblies (copied by scripts/fetch-libs.sh into libs/game/).
