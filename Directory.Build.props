@@ -40,4 +40,32 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- BepInEx core (extracted by scripts/fetch-libs.sh into libs/bepinex/).
+       JotunnLib transitively pulls 0Harmony. -->
+  <ItemGroup Condition="Exists('$(LibsDir)/bepinex/BepInEx.dll')">
+    <Reference Include="BepInEx">
+      <HintPath>$(LibsDir)/bepinex/BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Valheim game assemblies (copied by scripts/fetch-libs.sh into libs/game/).
+       Private=false so they aren't copied to mod output (the game provides them).
+       Mac build names; Windows differs slightly (assembly_steamworks vs
+       com.rlabrecque.steamworks.net) — adjust if a reference fails on your OS. -->
+  <ItemGroup Condition="Exists('$(LibsDir)/game/assembly_valheim.dll')">
+    <Reference Include="assembly_valheim"          HintPath="$(LibsDir)/game/assembly_valheim.dll"          Private="false" />
+    <Reference Include="assembly_utils"            HintPath="$(LibsDir)/game/assembly_utils.dll"            Private="false" />
+    <Reference Include="assembly_guiutils"        HintPath="$(LibsDir)/game/assembly_guiutils.dll"        Private="false" />
+    <Reference Include="assembly_googleanalytics"  HintPath="$(LibsDir)/game/assembly_googleanalytics.dll"  Private="false" />
+    <Reference Include="assembly_postprocessing"   HintPath="$(LibsDir)/game/assembly_postprocessing.dll"   Private="false" />
+    <Reference Include="com.rlabrecque.steamworks.net" HintPath="$(LibsDir)/game/com.rlabrecque.steamworks.net.dll" Private="false" />
+  </ItemGroup>
+
+  <!-- All UnityEngine module DLLs from the game (globbed at parse time).
+       Private=false so they aren't copied to mod output. -->
+  <ItemGroup Condition="Exists('$(LibsDir)/game/assembly_valheim.dll')">
+    <Reference Include="$(LibsDir)/game/UnityEngine*.dll" Private="false" />
+  </ItemGroup>
+
 </Project>

@@ -72,9 +72,9 @@ for f in "$MANAGED"/assembly_*.dll; do
   cp "$f" "$LIBS/game/"
   copied=$((copied+1))
 done
-# A few non-assembly_ game DLLs mods commonly need:
-for extra in UnityEngine.dll UnityEngine.CoreModule.dll UnityEngine.AssetBundleModule.dll; do
-  [[ -f "$MANAGED/$extra" ]] && cp "$MANAGED/$extra" "$LIBS/game/" && copied=$((copied+1))
+# All UnityEngine modules + a few commonly-needed non-assembly_ DLLs.
+for f in "$MANAGED"/UnityEngine*.dll "$MANAGED"/com.rlabrecque.steamworks.net.dll; do
+  [[ -f "$f" ]] && cp "$f" "$LIBS/game/" && copied=$((copied+1))
 done
 echo "Game assemblies -> $LIBS/game ($copied copied)"
 
