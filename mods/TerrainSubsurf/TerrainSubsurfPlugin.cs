@@ -43,8 +43,8 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
             new ConfigDescription("Height interpolation for new vertices. CatmullRom curves the surface; Linear makes smaller flat facets.",
                 new AcceptableValueList<string>("Linear", "CatmullRom"),
                 new ConfigurationManagerAttributes { Order = 3 }));
-        _cullDistance = Config.Bind("General", "CullDistance", 40f,
-            new ConfigDescription("Only smooth patches within this distance of the player (world units). 0 = smooth all loaded patches.",
+        _cullDistance = Config.Bind("General", "CullDistance", 0f,
+            new ConfigDescription("Only smooth patches within this distance of the player (world units). 0 = smooth ALL loaded patches (recommended — the whole world renders better). Set >0 to skip far patches for perf.",
                 null, new ConfigurationManagerAttributes { Order = 2 }));
         _flatEpsilon = Config.Bind("General", "FlatEpsilon", 0.05f,
             new ConfigDescription("Skip smoothing patches whose height range (max-min) is below this — flat terrain stays at vanilla cost.",
