@@ -25,6 +25,8 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     internal static ConfigEntry<string> _mode = null!;
     internal static ConfigEntry<float> _cullDistance = null!;
     internal static ConfigEntry<float> _flatEpsilon = null!;
+    internal static ConfigEntry<float> _cliffBlendBand = null!;
+
     internal static ConfigEntry<bool> _cliffFaceUV = null!;
     internal static ConfigEntry<float> _cliffTileSize = null!;
     internal static ConfigEntry<float> _cliffThreshold = null!;
@@ -61,6 +63,9 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
         _cliffThreshold = Config.Bind("General", "CliffFaceThreshold", 0.3f,
             new ConfigDescription("Steepness below which a face is treated as a cliff (|normal.y|; 0.3 ≈ 72°, lower = only sheer walls).",
                 null, new ConfigurationManagerAttributes { Order = -2 }));
+        _cliffBlendBand = Config.Bind("General", "CliffFaceBlendBand", 0.2f,
+            new ConfigDescription("Width of the blend zone between cliff and plan-view UV, in |normal.y| units. 0 = hard snap (old behavior, smudges). 0.2 = smooth crossfade.",
+                null, new ConfigurationManagerAttributes { Order = -3 }));
 
         Logger.LogInfo($"{NAME} {VERSION} | Enabled={_enabled.Value} Factor={_factor.Value} Mode={_mode.Value}");
 
@@ -344,25 +349,37 @@ internal static class Patches
         bool cliff = TerrainSubsurfPlugin._cliffFaceUV.Value;
         float tile = TerrainSubsurfPlugin._cliffTileSize.Value;
         float steepLimit = TerrainSubsurfPlugin._cliffThreshold.Value;
+        float band = TerrainSubsurfPlugin._cliffBlendBand.Value;
         if (cliff && tile > 0f)
         {
             Vector3[] normals = mesh.normals;
             Vector3 origin = hm.transform.position;
+            float low = Mathf.Max(0f, steepLimit - band * 0.5f);
+            float high = steepLimit + band * 0.5f;
             for (int i = 0; i < fn; i++)
             {
                 for (int j = 0; j < fn; j++)
                 {
                     int idx = i * fn + j;
-                    Vector3 normal = normals[idx];
-                    if (Mathf.Abs(normal.y) >= steepLimit) continue; // flat/slope: keep plan-view UV
+                    float ny = Mathf.Abs(normals[idx].y);
+                    // ponytail (UV seam fix): per-vertex hard snap left triangles
+                    // straddling the threshold with verts in DIFFERENT UV spaces, so the
+                    // GPU's linear UV interpolation sampled distant texels -> grey/green
+                    // smudge around every tiled area. Blend the two UV spaces smoothly
+                    // instead: w=0 (steep) -> pure wall UV, w=1 (flat) -> pure plan UV,
+                    // SmoothStep in between. Grass-vs-stone is normal-based in the shader,
+                    // so both spaces sample the SAME texture layer — the lerp is a clean
+                    // crossfade of tiling position, not a texture swap.
+                    float wgt = Mathf.SmoothStep(low, high, ny);
+                    if (wgt >= 1f) continue; // fully plan-view; the array already holds plan UV
                     // Verified vs decompile: CalcVertex returns LOCAL space and
                     // m_meshFilter = GetComponent<MeshFilter>() on the same GameObject,
                     // so world = hm.transform.position + localVert.
                     float v = (origin.y + verts[idx].y) / tile;
-                    float u = Mathf.Abs(normal.x) > Mathf.Abs(normal.z)
+                    float u = Mathf.Abs(normals[idx].x) > Mathf.Abs(normals[idx].z)
                         ? (origin.z + verts[idx].z) / tile   // wall faces ±X, along-wall = Z
                         : (origin.x + verts[idx].x) / tile;  // wall faces ±Z, along-wall = X
-                    uvs[idx] = new Vector2(u, v);
+                    uvs[idx] = Vector2.Lerp(new Vector2(u, v), uvs[idx], wgt);
                 }
             }
         }
