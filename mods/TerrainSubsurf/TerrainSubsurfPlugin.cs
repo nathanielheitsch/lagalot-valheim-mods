@@ -4,11 +4,14 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+// ConfigurationManagerAttributes lives in the global namespace (BepInEx
+// ConfigurationManager convention, referenced by Jotunn). Used unqualified.
 using UnityEngine;
 
 namespace TerrainSubsurf;
 
 [BepInPlugin(GUID, NAME, VERSION)]
+[BepInDependency("com.jotunn.jotunn")] // loads after Jotunn so ConfigManager panel is ready
 public class TerrainSubsurfPlugin : BaseUnityPlugin
 {
     public const string GUID = "lagalot.terrainsubsurf";
@@ -24,13 +27,20 @@ public class TerrainSubsurfPlugin : BaseUnityPlugin
     private void Awake()
     {
         Logger = base.Logger;
-        _enabled = Config.Bind("General", "Enabled", true, "Master toggle for terrain render smoothing.");
+        // Jotunn ConfigManager reads ConfigurationManagerAttributes tags to render the
+        // in-game panel (open with F1 by default). Our postfix reads these live, so a
+        // slider/toggle change re-subdivides on the next terrain rebuild.
+        _enabled = Config.Bind("General", "Enabled", true,
+            new ConfigDescription("Master toggle for terrain render smoothing.",
+                null, new ConfigurationManagerAttributes { Order = 3 }));
         _factor = Config.Bind("General", "SubdivisionFactor", 4,
-            new ConfigDescription("Render-mesh resolution multiplier. 1 = off (vanilla).",
-                new AcceptableValueList<int>(1, 2, 4, 8)));
+            new ConfigDescription("Render-mesh resolution multiplier. 1 = off (vanilla). 8 is a heavy GPU cost; 4 is the sane default.",
+                new AcceptableValueList<int>(1, 2, 4, 8),
+                new ConfigurationManagerAttributes { Order = 2 }));
         _mode = Config.Bind("General", "SmoothingMode", "CatmullRom",
-            new ConfigDescription("Height interpolation for new vertices.",
-                new AcceptableValueList<string>("Linear", "CatmullRom")));
+            new ConfigDescription("Height interpolation for new vertices. CatmullRom curves the surface; Linear makes smaller flat facets.",
+                new AcceptableValueList<string>("Linear", "CatmullRom"),
+                new ConfigurationManagerAttributes { Order = 1 }));
 
         Logger.LogInfo($"{NAME} {VERSION} | Enabled={_enabled.Value} Factor={_factor.Value} Mode={_mode.Value}");
 
